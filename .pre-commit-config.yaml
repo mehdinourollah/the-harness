@@ -34,9 +34,10 @@ repos:
   - repo: local
     hooks:
       # Full suite on push. Slow (~seconds), so pre-push, not pre-commit.
+      # Uses the repo venv explicitly so pushes work from a bare shell.
       - id: pytest
         name: pytest (100% coverage gate)
-        entry: python -m pytest --cov=harness --cov-fail-under=100
+        entry: .venv/bin/python -m pytest --cov=harness --cov-fail-under=100
         language: system
         pass_filenames: false
         always_run: true
