@@ -18,6 +18,8 @@ dependencies = [
   "httpx>=0.28,<0.29",
   "opentelemetry-sdk>=1.45,<2",
   "opentelemetry-exporter-otlp-proto-http>=1.45,<2",
+  "rich>=13.9,<16",
+  "prompt_toolkit>=3.0.30,<4",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +48,8 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+# `❯` is the REPL prompt glyph, alongside the `⏺`/`⎿` tool markers.
+allowed-confusables = ["❯"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["harness"]

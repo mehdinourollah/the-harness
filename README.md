@@ -30,7 +30,11 @@ optional [Langfuse](https://langfuse.com) tracing.
   token/cost usage across turns (`2 req · 3 tool · 1.2k tok · $0.004` after
   every answer). `--no-history` starts each turn fresh.
 - **Live Claude-Code-style rendering** — every tool call and its output streams
-  to the terminal as it happens.
+  to the terminal as it happens; errors arrive as red panels, answers close
+  with a token/cost footer.
+- **Real inputs, styled output** — prompt_toolkit editing with persistent
+  command history (`~/.the-harness/history`) when interactive; plain `input()`
+  when piped, so scripts and CI behave exactly as before.
 - **Langfuse observability** — `--trace` exports model and tool spans over OTLP
   to a self-hosted Langfuse stack (`docker-compose.langfuse.yml` included).
 

@@ -1,34 +1,30 @@
-"""CLI entrypoint: a REPL that renders tool calls live and traces to Langfuse."""
+"""CLI entrypoint: a REPL that renders tool calls live and traces to Langfuse.
+
+Presentation lives in :mod:`harness.ui`; this module owns argument parsing,
+the run loop, and how failures are reported.
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 from pathlib import Path
 
 from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
 from pydantic_ai.usage import RunUsage
 
+from harness import ui
 from harness.agent import Session, StreamEvent, build_agent, run_agent
 from harness.config import HarnessConfig
 from harness.deps import AgentDeps
 from harness.errors import HarnessError
-from harness.policy import ActionRequest, build_policy
+from harness.policy import build_policy
 from harness.tracing import setup_tracing
+from harness.ui import render, terminal_approval
 
 #: Harness failures plus PydanticAI's run-level failures (provider 4xx/5xx,
 #: retry exhaustion, usage limits). Both are reported, never traceback-dumped.
 RUN_FAILURES = (HarnessError, AgentRunError)
-
-DIM, BOLD, RESET, CYAN, YELLOW, RED = (
-    "\033[2m",
-    "\033[1m",
-    "\033[0m",
-    "\033[36m",
-    "\033[33m",
-    "\033[31m",
-)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -72,36 +68,6 @@ def config_from_args(args: argparse.Namespace) -> HarnessConfig:
     )
 
 
-def terminal_approval(request: ActionRequest) -> bool:
-    detail = f"\n  {DIM}{request.detail}{RESET}" if request.detail else ""
-    prompt = (
-        f"{YELLOW}allow {request.action.value}?{RESET} {request.summary}{detail} [y/N] "
-    )
-    return input(prompt).strip().lower() in {"y", "yes"}
-
-
-def render(event: StreamEvent) -> None:
-    if event.kind == "tool_call":
-        print(f"\n{BOLD}⏺ {event.name}{RESET}({event.text})")
-    elif event.kind == "tool_result":
-        body = event.text.strip()
-        if body:
-            first, *rest = body.splitlines()
-            print(f"  {DIM}⎿ {first[:400]}{RESET}")
-            for line in rest[:12]:
-                print(f"    {DIM}{line[:400]}{RESET}")
-    elif event.kind == "text":
-        sys.stdout.write(event.text)
-        sys.stdout.flush()
-
-
-def report_failure(exc: Exception) -> None:
-    if isinstance(exc, UsageLimitExceeded):
-        print(f"{YELLOW}stopped: step budget exhausted ({exc}){RESET}")
-    else:
-        print(f"{RED}error: {exc}{RESET}")
-
-
 def format_usage(usage: RunUsage) -> str:
     """One-line token/cost footer for the run that just finished."""
     parts = [
@@ -114,6 +80,14 @@ def format_usage(usage: RunUsage) -> str:
     return " · ".join(parts)
 
 
+def report_failure(exc: Exception) -> None:
+    """Report a failed turn without discarding the REPL session."""
+    if isinstance(exc, UsageLimitExceeded):
+        ui.warn(f"stopped: step budget exhausted ({exc})")
+    else:
+        ui.error(exc)
+
+
 async def run_once(
     agent,
     deps: AgentDeps,
@@ -124,9 +98,10 @@ async def run_once(
 ) -> None:
     def handle(event: StreamEvent) -> None:
         if event.kind == "final":
-            print(f"\n\n{BOLD}{event.text.strip()}{RESET}")
-            if event.usage is not None:
-                print(f"{DIM}{format_usage(event.usage)}{RESET}")
+            # The answer already streamed as text; the final event only
+            # carries usage, so close the turn instead of reprinting it.
+            usage = format_usage(event.usage) if event.usage is not None else None
+            ui.turn_end(usage)
         else:
             render(event)
 
@@ -148,34 +123,32 @@ def main(argv: list[str] | None = None) -> int:
     if config.trace:
         try:
             if setup_tracing(config):
-                print(f"{DIM}tracing → {config.langfuse_host}{RESET}", file=sys.stderr)
+                ui.info(f"tracing → {config.langfuse_host}", stderr=True)
         except HarnessError as exc:
-            print(f"{YELLOW}tracing disabled: {exc}{RESET}", file=sys.stderr)
+            ui.warn(f"tracing disabled: {exc}", stderr=True)
 
     if args.prompt:
         prompt = " ".join(args.prompt)
         try:
             asyncio.run(run_once(agent, deps, prompt, max_turns=config.max_turns))
         except RUN_FAILURES as exc:
-            print(f"{RED}{exc}{RESET}", file=sys.stderr)
+            ui.error(exc, stderr=True)
             return 1
         return 0
 
     session = Session()
-    print(
-        f"{BOLD}harness{RESET} {DIM}— {config.provider}/{config.model} "
-        f"policy={args.policy}{RESET}\ntype 'exit' to quit\n"
-    )
+    ui.banner(config, args.policy)
     while True:
         try:
-            line = input(f"{CYAN}›{RESET} ").strip()  # noqa: RUF001
+            line = ui.read_line()
         except (EOFError, KeyboardInterrupt):
-            print()
+            ui.console.print()
             return 0
         if line in {"exit", "quit"}:
             return 0
         if not line:
             continue
+        ui.user_turn(line)
         try:
             asyncio.run(
                 run_once(
@@ -189,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         except RUN_FAILURES as exc:
             report_failure(exc)
         except KeyboardInterrupt:
-            print(f"\n{DIM}interrupted{RESET}")
+            ui.warn("interrupted")
 
 
 if __name__ == "__main__":

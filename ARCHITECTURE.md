@@ -63,7 +63,7 @@ Verified source of truth: `harness/` (16 modules, 577 statements),
 | Tools | **us** | `harness/tools/*` |
 | Execution policy | **us** | `harness/policy.py` (Policy pattern) |
 | Trust boundary | **us** | `common.resolve()` — every path goes through it |
-| CLI / rendering | **us** | `harness/main.py`, `agent.translate()` |
+| CLI / rendering | **us** | `harness/main.py`, `harness/ui.py` |
 | Observability | **us** | `harness/tracing.py` → OTLP → Langfuse |
 
 The previous hand-rolled provider adapters, agent loop, context-pruning
@@ -96,13 +96,25 @@ instead of aborting the run — the loop self-heals.
 ## 6. Live rendering
 
 `run_agent` receives a callback and pushes `StreamEvent`s translated from
-PydanticAI's stream events:
+PydanticAI's stream events; `harness/ui.py` turns them into styled output:
 
 ```
+❯ read a.txt
+I'll take a look at that file.
+
 ⏺ view_file(path='a.txt')
   ⎿ --- a.txt (lines 1-1 of 1) ---
         1  hello
+The file contains "hello".
+
+────────────────────────────────────────
+2 req · 1 tool · 96 tok · $0.0004
 ```
+
+Each role gets its own style (user cyan, tool name magenta, results/footer dim,
+errors a red panel), so turns never blur together. The answer streams once; the
+`final` event only closes the turn with the usage footer. Input runs through
+prompt_toolkit on a TTY (with persistent history) and falls back to `input()`.
 
 ## 7. Observability
 

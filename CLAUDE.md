@@ -53,6 +53,7 @@ PydanticAI owns the agent loop, streaming, retries, provider adapters, tool sche
 - `harness/policy.py`: `ReadOnlyPolicy` / `AutoApprovePolicy` / `InteractivePolicy` (`Action`/`Decision` are `StrEnum`). Side-effecting tools call `ctx.deps.check(Action, ...)`.
 - `harness/errors.py`: `ToolError` and `PolicyDenied` subclass PydanticAI's `ModelRetry`, so failures inside a run become retry prompts (self-correction), not crashes.
 - `harness/main.py`: CLI + REPL with live tool-call rendering; run failures (`HarnessError`, PydanticAI `AgentRunError`) are reported, never dumped as tracebacks.
+- `harness/ui.py`: all presentation — rich output (banner panel, tool/user/footer/error styles) and the input seam (`read_line`/`confirm` use prompt_toolkit on a TTY, plain `input()` otherwise; history at `~/.the-harness/history`). The final answer streams live and is **not** reprinted; the `final` event only closes the turn with the usage footer.
 - `harness/tracing.py`: when `--trace` is on, wires the OTLP exporter to Langfuse (`{host}/api/public/otel`) and calls `Agent.instrument_all()`.
 
 ## Langfuse (local)

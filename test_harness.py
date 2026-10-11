@@ -37,6 +37,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from harness import agent as A
+from harness import ui
 from harness.agent import Session, StreamEvent, build_agent, run_agent
 from harness.config import HarnessConfig
 from harness.deps import AgentDeps
@@ -997,6 +998,107 @@ class TestLiveRendering:
     def test_render_result_with_empty_body(self, capsys):
         render(StreamEvent("tool_result", text="   "))
         assert capsys.readouterr().out == ""
+
+
+class TestUI:
+    """Presentation: styled output, and input that degrades off a TTY."""
+
+    @staticmethod
+    def _fake_tty(monkeypatch, tmp_path, answers: list[str]) -> list:
+        """Make prompt_toolkit usable without a terminal; return built sessions."""
+        import prompt_toolkit
+
+        remaining = iter(answers)
+        built: list = []
+
+        class FakeSession:
+            def __init__(self, *a, **k):
+                self.init_kwargs = k
+                self.prompts: list = []
+
+            def prompt(self, styled):
+                self.prompts.append(styled)
+                return next(remaining)
+
+        def factory(*a, **k):
+            session = FakeSession(*a, **k)
+            built.append(session)
+            return session
+
+        monkeypatch.setattr(prompt_toolkit, "PromptSession", factory)
+        monkeypatch.setattr(ui, "_interactive", lambda: True)
+        monkeypatch.setattr(ui, "_session", None)
+        monkeypatch.setattr(ui, "HISTORY_PATH", tmp_path / "hist" / "history")
+        return built
+
+    def test_read_line_uses_prompt_session_and_caches_it(self, tmp_path, monkeypatch):
+        built = self._fake_tty(monkeypatch, tmp_path, ["  hello  ", "again"])
+        assert ui.read_line() == "hello"
+        assert ui.read_line() == "again"
+        # One session, built once, and its history file's parent was created.
+        assert len(built) == 1
+        assert isinstance(built[0].init_kwargs["history"], object)
+        assert (tmp_path / "hist").is_dir()
+
+    def test_confirm_interactive_applies_default_and_parses_yes(
+        self, tmp_path, monkeypatch
+    ):
+        self._fake_tty(monkeypatch, tmp_path, ["", "yes"])
+        assert ui.confirm("proceed?") is False  # empty -> default (False)
+        assert ui.confirm("proceed?") is True
+
+    def test_confirm_noninteractive_branches(self, monkeypatch):
+        monkeypatch.setattr(ui, "_interactive", lambda: False)
+        monkeypatch.setattr("builtins.input", lambda *a: "")
+        assert ui.confirm("proceed?", default=True) is True  # empty -> default
+        monkeypatch.setattr("builtins.input", lambda *a: "n")
+        assert ui.confirm("proceed?") is False
+
+    def test_read_line_falls_back_to_input_when_not_a_tty(self, monkeypatch):
+        monkeypatch.setattr(ui, "_interactive", lambda: False)
+        monkeypatch.setattr("builtins.input", lambda *a: "  typed  ")
+        assert ui.read_line() == "typed"
+
+    def test_user_turn_is_echoed(self, capsys):
+        ui.user_turn("refactor the parser")
+        assert "refactor the parser" in capsys.readouterr().out
+
+    def test_banner_shows_model_and_policy(self, capsys):
+        config = HarnessConfig(provider="openai", model="gpt-5", workspace=Path("."))
+        ui.banner(config, "readonly")
+        out = capsys.readouterr().out
+        assert "openai/gpt-5" in out and "readonly" in out
+
+    def test_turn_end_prints_footer_only_when_usage_known(self, capsys):
+        ui.turn_end("3 req · 1 tool · 5 tok")
+        assert "3 req" in capsys.readouterr().out
+        ui.turn_end(None)
+        assert "req" not in capsys.readouterr().out
+
+    def test_error_warn_info_route_to_chosen_stream(self, capsys):
+        ui.error(ToolError("boom"))
+        ui.warn("careful")
+        ui.info("fyi")
+        cap = capsys.readouterr()
+        assert "boom" in cap.out and "careful" in cap.out and "fyi" in cap.out
+
+        ui.error(ToolError("kaboom"), stderr=True)
+        ui.warn("w-stderr", stderr=True)
+        ui.info("i-stderr", stderr=True)
+        cap = capsys.readouterr()
+        assert "kaboom" in cap.err and "w-stderr" in cap.err and "i-stderr" in cap.err
+
+    def test_run_once_prints_the_answer_exactly_once(self, tmp_path, capsys):
+        """The answer streams live; the `final` event must not reprint it."""
+
+        async def ffn(messages, info):
+            yield "the answer"
+
+        agent = Agent(FunctionModel(stream_function=ffn), deps_type=AgentDeps)
+        asyncio.run(run_once(agent, make_deps(tmp_path), "hi", max_turns=4))
+        out = capsys.readouterr().out
+        assert out.count("the answer") == 1
+        assert "req" in out and "tok" in out
 
 
 class TestResidualBranches:
