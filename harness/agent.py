@@ -7,6 +7,7 @@ happen, returning the final answer.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
@@ -16,10 +17,12 @@ from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
+    ModelMessage,
     PartDeltaEvent,
     PartStartEvent,
     TextPartDelta,
 )
+from pydantic_ai.usage import RunUsage
 
 from harness.config import HarnessConfig
 from harness.deps import AgentDeps
@@ -53,9 +56,24 @@ class StreamEvent:
     text: str = ""
     name: str = ""
     payload: object = field(default=None, repr=False)
+    #: Token/cost accounting, set on the "final" event.
+    usage: RunUsage | None = None
 
 
 EventHandler = Callable[[StreamEvent], None]
+
+
+@dataclass
+class Session:
+    """Conversation state carried across REPL turns.
+
+    Holds the message history and the cumulative token usage. PydanticAI owns the
+    context window; this is just the handle the caller keeps so the next turn
+    sees what happened in the last one.
+    """
+
+    messages: list[ModelMessage] = field(default_factory=list)
+    usage: RunUsage = field(default_factory=RunUsage)
 
 
 def _describe_call(part: object) -> tuple[str, str]:
@@ -63,10 +81,8 @@ def _describe_call(part: object) -> tuple[str, str]:
     args = getattr(part, "args", None)
     if isinstance(args, str):
         # Streamed calls deliver the arguments as a JSON string.
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             args = json.loads(args) or None
-        except json.JSONDecodeError:
-            pass
     if isinstance(args, dict):
         shown = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:5])
     elif args:
@@ -94,9 +110,12 @@ def translate(event: AgentStreamEvent) -> StreamEvent | None:
         return StreamEvent(
             "tool_result", text=_extract_content(event)[:4000], payload=event
         )
-    if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-        if event.delta.content_delta:
-            return StreamEvent("text", text=event.delta.content_delta)
+    if (
+        isinstance(event, PartDeltaEvent)
+        and isinstance(event.delta, TextPartDelta)
+        and event.delta.content_delta
+    ):
+        return StreamEvent("text", text=event.delta.content_delta)
     if isinstance(event, PartStartEvent) and event.part.part_kind == "text":
         content = getattr(event.part, "content", "")
         if content:
@@ -110,10 +129,15 @@ async def run_agent(
     deps: AgentDeps,
     on_event: EventHandler | None = None,
     *,
+    session: Session | None = None,
     max_turns: int = 24,
     max_tool_calls: int = 50,
 ) -> str:
-    """Run the agent, forwarding live events to `on_event`; return the answer."""
+    """Run the agent, forwarding live events to `on_event`; return the answer.
+
+    Pass a `Session` to keep history and usage across runs: the prompt is appended
+    to what the session already has, and the session is updated in place.
+    """
     limits = UsageLimits(request_limit=max_turns, tool_calls_limit=max_tool_calls)
 
     async def handler(
@@ -129,8 +153,15 @@ async def run_agent(
                 on_event(rendered)
 
     result = await agent.run(
-        prompt, deps=deps, usage_limits=limits, event_stream_handler=handler
+        prompt,
+        deps=deps,
+        usage_limits=limits,
+        message_history=session.messages if session else None,
+        event_stream_handler=handler,
     )
+    if session is not None:
+        session.messages = result.all_messages()
+        session.usage.incr(result.usage)
     if on_event is not None:
-        on_event(StreamEvent("final", text=str(result.output)))
+        on_event(StreamEvent("final", text=str(result.output), usage=result.usage))
     return result.output

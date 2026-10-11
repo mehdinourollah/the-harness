@@ -1,5 +1,7 @@
 {
-  "venvPath": "/Users/mehdinourollah/Developer/claude-code-playground",
+  "venvPath": ".",
   "venv": ".venv",
-  "extraPaths": ["/Users/mehdinourollah/Developer/claude-code-playground"]
+  "extraPaths": ["."],
+  "include": ["harness"],
+  "pythonVersion": "3.11"
 }

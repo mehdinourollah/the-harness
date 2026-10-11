@@ -43,7 +43,6 @@ def setup_tracing(config: HarnessConfig) -> bool:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.trace import set_tracer_provider
-
     from pydantic_ai import Agent
 
     provider = TracerProvider()

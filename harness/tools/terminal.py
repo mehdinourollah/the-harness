@@ -37,11 +37,13 @@ async def execute_command(
         raise ToolError(f"spawn failed: {exc}") from exc
 
     try:
-        out_bytes, err_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+        out_bytes, err_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
+    except TimeoutError:
         proc.kill()
         await proc.wait()
-        raise ToolError(f"command timed out after {timeout:.1f}s: {command}")
+        raise ToolError(f"command timed out after {timeout:.1f}s: {command}") from None
 
     out = out_bytes.decode(errors="replace")
     err = err_bytes.decode(errors="replace")

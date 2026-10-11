@@ -7,21 +7,21 @@ effectful tool call declares the `Action`s it performs; the policy decides.
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
 from harness.errors import PolicyDenied
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     READ = "read"
     WRITE = "write"
     EXECUTE = "execute"
     NETWORK = "network"
 
 
-class Decision(str, Enum):
+class Decision(StrEnum):
     ALLOW = "allow"
     ASK = "ask"
     DENY = "deny"
@@ -56,11 +56,12 @@ class ExecutionPolicy(BaseModel):
         decision = self.decide(request)
         if decision is Decision.DENY:
             raise PolicyDenied(f"{request.action.value} denied: {request.summary}")
-        if decision is Decision.ASK:
-            if self.approve is None or not self.approve(request):
-                raise PolicyDenied(
-                    f"{request.action.value} not approved: {request.summary}"
-                )
+        if decision is Decision.ASK and (
+            self.approve is None or not self.approve(request)
+        ):
+            raise PolicyDenied(
+                f"{request.action.value} not approved: {request.summary}"
+            )
 
 
 class ReadOnlyPolicy(ExecutionPolicy):

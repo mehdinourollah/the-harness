@@ -7,13 +7,15 @@ import asyncio
 import sys
 from pathlib import Path
 
-from harness.agent import StreamEvent, build_agent, run_agent
+from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
+from pydantic_ai.usage import RunUsage
+
+from harness.agent import Session, StreamEvent, build_agent, run_agent
 from harness.config import HarnessConfig
 from harness.deps import AgentDeps
 from harness.errors import HarnessError
 from harness.policy import ActionRequest, build_policy
 from harness.tracing import setup_tracing
-from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
 
 #: Harness failures plus PydanticAI's run-level failures (provider 4xx/5xx,
 #: retry exhaustion, usage limits). Both are reported, never traceback-dumped.
@@ -38,11 +40,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--base-url", default=None)
     p.add_argument("--api-key", default=None)
-    p.add_argument("--policy", choices=["readonly", "auto-approve", "interactive"],
-                   default="interactive")
+    p.add_argument(
+        "--policy",
+        choices=["readonly", "auto-approve", "interactive"],
+        default="interactive",
+    )
     p.add_argument("--workspace", default=".")
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max-turns", type=int, default=24)
+    p.add_argument(
+        "--no-history",
+        action="store_true",
+        help="REPL: each turn starts fresh (no carried context)",
+    )
     p.add_argument("--trace", action="store_true", help="export spans to Langfuse")
     p.add_argument("--langfuse-host", default="http://localhost:3000")
     return p.parse_args(argv)
@@ -64,10 +74,10 @@ def config_from_args(args: argparse.Namespace) -> HarnessConfig:
 
 def terminal_approval(request: ActionRequest) -> bool:
     detail = f"\n  {DIM}{request.detail}{RESET}" if request.detail else ""
-    answer = input(
+    prompt = (
         f"{YELLOW}allow {request.action.value}?{RESET} {request.summary}{detail} [y/N] "
-    ).strip().lower()
-    return answer in {"y", "yes"}
+    )
+    return input(prompt).strip().lower() in {"y", "yes"}
 
 
 def render(event: StreamEvent) -> None:
@@ -92,14 +102,35 @@ def report_failure(exc: Exception) -> None:
         print(f"{RED}error: {exc}{RESET}")
 
 
-async def run_once(agent, deps: AgentDeps, prompt: str, *, max_turns: int) -> None:
+def format_usage(usage: RunUsage) -> str:
+    """One-line token/cost footer for the run that just finished."""
+    parts = [
+        f"{usage.requests} req",
+        f"{usage.tool_calls} tool",
+        f"{usage.total_tokens} tok",
+    ]
+    if usage.cost is not None:
+        parts.append(f"${usage.cost:.4f}")
+    return " · ".join(parts)
+
+
+async def run_once(
+    agent,
+    deps: AgentDeps,
+    prompt: str,
+    *,
+    max_turns: int,
+    session: Session | None = None,
+) -> None:
     def handle(event: StreamEvent) -> None:
         if event.kind == "final":
             print(f"\n\n{BOLD}{event.text.strip()}{RESET}")
+            if event.usage is not None:
+                print(f"{DIM}{format_usage(event.usage)}{RESET}")
         else:
             render(event)
 
-    await run_agent(agent, prompt, deps, handle, max_turns=max_turns)
+    await run_agent(agent, prompt, deps, handle, session=session, max_turns=max_turns)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,9 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     if config.trace:
         try:
             if setup_tracing(config):
-                print(
-                    f"{DIM}tracing → {config.langfuse_host}{RESET}", file=sys.stderr
-                )
+                print(f"{DIM}tracing → {config.langfuse_host}{RESET}", file=sys.stderr)
         except HarnessError as exc:
             print(f"{YELLOW}tracing disabled: {exc}{RESET}", file=sys.stderr)
 
@@ -132,13 +161,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
+    session = Session()
     print(
         f"{BOLD}harness{RESET} {DIM}— {config.provider}/{config.model} "
         f"policy={args.policy}{RESET}\ntype 'exit' to quit\n"
     )
     while True:
         try:
-            line = input(f"{CYAN}›{RESET} ").strip()
+            line = input(f"{CYAN}›{RESET} ").strip()  # noqa: RUF001
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -147,7 +177,15 @@ def main(argv: list[str] | None = None) -> int:
         if not line:
             continue
         try:
-            asyncio.run(run_once(agent, deps, line, max_turns=config.max_turns))
+            asyncio.run(
+                run_once(
+                    agent,
+                    deps,
+                    line,
+                    max_turns=config.max_turns,
+                    session=None if args.no_history else session,
+                )
+            )
         except RUN_FAILURES as exc:
             report_failure(exc)
         except KeyboardInterrupt:

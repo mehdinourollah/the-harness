@@ -22,6 +22,7 @@ os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 import httpx
 import pytest
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -33,16 +34,16 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ToolCallPart,
 )
-from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from harness import agent as A
-from harness.agent import StreamEvent, build_agent, run_agent
+from harness.agent import Session, StreamEvent, build_agent, run_agent
 from harness.config import HarnessConfig
 from harness.deps import AgentDeps
 from harness.errors import ConfigError, HarnessError, PolicyDenied, ToolError
 from harness.main import (
     config_from_args,
+    format_usage,
     main,
     parse_args,
     render,
@@ -121,8 +122,6 @@ def scripted(*responses: ModelResponse) -> Agent:
 
 async def collect(agent: Agent, prompt: str, deps: AgentDeps, **kw) -> tuple[str, list]:
     """Run the agent, returning (final output, captured events)."""
-    from harness.agent import StreamEvent
-
     events: list[StreamEvent] = []
     output = await run_agent(agent, prompt, deps, events.append, **kw)
     return output, events
@@ -154,7 +153,9 @@ class TestConfig:
         assert out.model == "b"
 
     def test_cli_overrides_from_args(self):
-        args = parse_args(["--provider", "anthropic", "--model", "m", "--policy", "readonly", "go"])
+        args = parse_args(
+            ["--provider", "anthropic", "--model", "m", "--policy", "readonly", "go"]
+        )
         c = config_from_args(args)
         assert c.provider == "anthropic" and c.model == "m" and args.prompt == ["go"]
 
@@ -207,7 +208,9 @@ class TestPolicy:
     def test_build_policy_known_and_unknown(self):
         assert isinstance(build_policy("readonly"), ReadOnlyPolicy)
         assert isinstance(build_policy("auto-approve"), AutoApprovePolicy)
-        assert isinstance(build_policy("interactive", approve=lambda r: True), InteractivePolicy)
+        assert isinstance(
+            build_policy("interactive", approve=lambda r: True), InteractivePolicy
+        )
         with pytest.raises(ValueError):
             build_policy("nope")
 
@@ -391,7 +394,9 @@ class TestTerminal:
 class TestGit:
     async def _repo(self, tmp_path):
         ctx = ctx_for(tmp_path)
-        await T.execute_command(ctx, "git init -q && git config user.email t@t && git config user.name t")
+        await T.execute_command(
+            ctx, "git init -q && git config user.email t@t && git config user.name t"
+        )
         return ctx
 
     async def test_status_and_commit_and_log(self, tmp_path):
@@ -421,7 +426,9 @@ class TestGit:
 
     async def test_checkout_existing_branch(self, tmp_path):
         ctx = await self._repo(tmp_path)
-        await T.execute_command(ctx, "git commit -q --allow-empty -m init && git branch two")
+        await T.execute_command(
+            ctx, "git commit -q --allow-empty -m init && git branch two"
+        )
         out = await G.git_checkout_branch(ctx, "two")
         assert "two" in out
 
@@ -453,7 +460,9 @@ class _FakeClient:
     async def get(self, *a, **k):
         if self._fail:
             raise httpx.ConnectError("boom")
-        return httpx.Response(200, text=self._text, request=httpx.Request("GET", "http://x"))
+        return httpx.Response(
+            200, text=self._text, request=httpx.Request("GET", "http://x")
+        )
 
 
 class TestWeb:
@@ -499,7 +508,9 @@ class TestModelFactory:
 
     def test_openai_with_env_key_and_base_url(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
-        m = build_model(HarnessConfig(provider="openai", base_url="http://localhost:1234/v1"))
+        m = build_model(
+            HarnessConfig(provider="openai", base_url="http://localhost:1234/v1")
+        )
         assert type(m).__name__ == "OpenAIChatModel"
 
     def test_anthropic_with_key(self):
@@ -531,10 +542,14 @@ class TestTracing:
         import opentelemetry.exporter.otlp.proto.http.trace_exporter as mod
 
         monkeypatch.setattr(mod, "OTLPSpanExporter", lambda *a, **k: _NoopExporter())
-        assert setup_tracing(HarnessConfig(trace=True, langfuse_host="http://lf:3000")) is True
-        assert "http://lf:3000/api/public/otel" in os.environ[
-            "OTEL_EXPORTER_OTLP_ENDPOINT"
-        ]
+        assert (
+            setup_tracing(HarnessConfig(trace=True, langfuse_host="http://lf:3000"))
+            is True
+        )
+        assert (
+            "http://lf:3000/api/public/otel"
+            in os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
+        )
 
 
 class _NoopExporter:
@@ -580,7 +595,9 @@ class TestAgentLoop:
         assert output == "that failed, retrying"
 
     async def test_readonly_policy_blocks_write_inside_agent(self, tmp_path):
-        agent = scripted(call("write_file", path="x.txt", content="data"), say("blocked"))
+        agent = scripted(
+            call("write_file", path="x.txt", content="data"), say("blocked")
+        )
         deps = make_deps(tmp_path, ReadOnlyPolicy())
         output, events = await collect(agent, "write", deps)
         results = " ".join(e.text for e in events if e.kind == "tool_result")
@@ -619,12 +636,104 @@ class TestAgentLoop:
 
 
 # --------------------------------------------------------------------------- #
+# session memory: history carried across runs
+# --------------------------------------------------------------------------- #
+class TestSession:
+    async def test_history_carries_across_runs(self, tmp_path):
+        agent = scripted(say("first"), say("second"))
+        deps = make_deps(tmp_path)
+        session = Session()
+        await run_agent(agent, "q1", deps, session=session)
+        assert len(session.messages) == 2  # one request, one response
+        await run_agent(agent, "q2", deps, session=session)
+        # Four messages means turn two was sent the prior exchange.
+        assert len(session.messages) == 4
+        assert sum(type(m).__name__ == "ModelRequest" for m in session.messages) == 2
+
+    async def test_session_usage_accumulates(self, tmp_path):
+        agent = scripted(say("first"), say("second"))
+        deps = make_deps(tmp_path)
+        session = Session()
+        await run_agent(agent, "q1", deps, session=session)
+        after_one = session.usage.requests
+        await run_agent(agent, "q2", deps, session=session)
+        assert session.usage.requests == after_one * 2
+        assert session.usage.total_tokens >= 0
+
+    async def test_without_session_history_is_not_kept(self, tmp_path):
+        agent = scripted(say("a"), say("b"))
+        deps = make_deps(tmp_path)
+        await run_agent(agent, "q1", deps)
+        output, _ = await collect(agent, "q2", deps)
+        assert output == "b"  # second run started clean
+
+    async def test_final_event_carries_usage(self, tmp_path):
+        agent = scripted(say("done"))
+        _, events = await collect(agent, "hi", make_deps(tmp_path))
+        assert events[-1].usage is not None
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 class TestCLI:
+    def test_format_usage_without_cost(self):
+        from pydantic_ai.usage import RunUsage
+
+        line = format_usage(RunUsage(requests=2, tool_calls=3, input_tokens=100))
+        assert "2 req" in line and "3 tool" in line and "$" not in line
+
+    def test_format_usage_with_cost(self):
+        from decimal import Decimal
+
+        from pydantic_ai.usage import RunUsage
+
+        line = format_usage(
+            RunUsage(requests=1, input_tokens=10, cost=Decimal("0.0123"))
+        )
+        assert "$0.0123" in line
+
+    def test_run_once_prints_answer_and_usage(self, tmp_path, capsys):
+        async def ffn(messages, info):
+            yield "the answer"
+
+        agent = Agent(FunctionModel(stream_function=ffn), deps_type=AgentDeps)
+        asyncio.run(run_once(agent, make_deps(tmp_path), "hi", max_turns=4))
+        out = capsys.readouterr().out
+        assert "the answer" in out
+        assert "req" in out and "tok" in out
+
+    def test_repl_no_history_passes_no_session(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("harness.main.build_agent", lambda c: object())
+        seen: list = []
+
+        async def fake_run_once(agent, deps, prompt, *, max_turns, session=None):
+            seen.append(session)
+
+        monkeypatch.setattr("harness.main.run_once", fake_run_once)
+        answers = iter(["one", "two", "exit"])
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        assert main(["--workspace", str(tmp_path), "--no-history"]) == 0
+        assert seen == [None, None]
+
+    def test_repl_shares_one_session(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("harness.main.build_agent", lambda c: object())
+        seen: list = []
+
+        async def fake_run_once(agent, deps, prompt, *, max_turns, session=None):
+            seen.append(session)
+
+        monkeypatch.setattr("harness.main.run_once", fake_run_once)
+        answers = iter(["one", "two", "exit"])
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        assert main(["--workspace", str(tmp_path)]) == 0
+        assert seen[0] is not None and seen[0] is seen[1]
+
     def test_terminal_approval_yes(self, monkeypatch):
         monkeypatch.setattr("builtins.input", lambda *a: "y")
-        assert terminal_approval(ActionRequest(action=Action.WRITE, summary="s")) is True
+        assert (
+            terminal_approval(ActionRequest(action=Action.WRITE, summary="s")) is True
+        )
 
     def test_terminal_approval_no_with_detail(self, monkeypatch):
         monkeypatch.setattr("builtins.input", lambda *a: "")
@@ -641,7 +750,7 @@ class TestCLI:
             seen["config"] = config
             return FakeAgent()
 
-        async def fake_run_once(agent, deps, prompt, *, max_turns):
+        async def fake_run_once(agent, deps, prompt, *, max_turns, session=None):
             seen["prompt"] = prompt
 
         monkeypatch.setattr("harness.main.build_agent", fake_build_agent)
@@ -668,7 +777,7 @@ class TestCLI:
         monkeypatch.setattr("harness.main.build_agent", lambda c: object())
         calls: list[str] = []
 
-        async def fake_run_once(agent, deps, prompt, *, max_turns):
+        async def fake_run_once(agent, deps, prompt, *, max_turns, session=None):
             calls.append(prompt)
 
         monkeypatch.setattr("harness.main.run_once", fake_run_once)
@@ -688,7 +797,7 @@ class TestCLI:
         monkeypatch.setattr("harness.main.build_agent", lambda c: object())
         state = {"n": 0}
 
-        async def flaky(agent, deps, prompt, *, max_turns):
+        async def flaky(agent, deps, prompt, *, max_turns, session=None):
             state["n"] += 1
             raise ToolError("nope")
 
@@ -719,8 +828,14 @@ class TestCLI:
 
         monkeypatch.setattr("harness.main.run_once", fake_run_once)
         rc = main(
-            ["--workspace", str(tmp_path), "--trace",
-             "--langfuse-host", "http://langfuse.test", "hi"]
+            [
+                "--workspace",
+                str(tmp_path),
+                "--trace",
+                "--langfuse-host",
+                "http://langfuse.test",
+                "hi",
+            ]
         )
         assert rc == 0 and "http://langfuse.test" in capsys.readouterr().err
 
@@ -755,9 +870,14 @@ class TestCLI:
         assert main(["--workspace", str(tmp_path), "x"]) == 1
         assert "Unauthorized" in capsys.readouterr().err
 
+    # runpy re-executes harness.main which is already imported; the double-import
+    # RuntimeWarning is expected and not what this test is about.
+    @pytest.mark.filterwarnings("ignore:.*harness.main.*sys.modules.*:RuntimeWarning")
     def test_dunder_main_guard(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["harness", "--workspace", str(tmp_path)])
-        monkeypatch.setattr("builtins.input", lambda *a: (_ for _ in ()).throw(EOFError()))
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: (_ for _ in ()).throw(EOFError())
+        )
         monkeypatch.setattr("harness.main.build_agent", lambda c: object())
         with pytest.raises(SystemExit) as exc:
             runpy.run_module("harness.main", run_name="__main__")
@@ -805,33 +925,51 @@ class TestEventTranslation:
         assert name == "write_file" and "path='a.txt'" in shown
 
     def test_describe_call_non_dict_args(self):
-        assert A._describe_call(SimpleNamespace(tool_name="t", args=[1, 2]))[1] == "[1, 2]"
+        assert (
+            A._describe_call(SimpleNamespace(tool_name="t", args=[1, 2]))[1] == "[1, 2]"
+        )
 
     def test_describe_call_no_args(self):
-        assert A._describe_call(SimpleNamespace(tool_name="git_status", args=None))[1] == ""
+        assert (
+            A._describe_call(SimpleNamespace(tool_name="git_status", args=None))[1]
+            == ""
+        )
 
     def test_describe_call_unparseable_json_string(self):
         name, shown = A._describe_call(SimpleNamespace(tool_name="t", args="{oops"))
         assert name == "t" and shown == "{oops"
 
     def test_extract_content_falls_back_to_event_content(self):
-        assert A._extract_content(SimpleNamespace(part=None, content="fell back")) == "fell back"
+        assert (
+            A._extract_content(SimpleNamespace(part=None, content="fell back"))
+            == "fell back"
+        )
 
     def test_extract_content_prefers_part(self):
         part = SimpleNamespace(content="from part")
-        assert A._extract_content(SimpleNamespace(part=part, content="ignore")) == "from part"
+        assert (
+            A._extract_content(SimpleNamespace(part=part, content="ignore"))
+            == "from part"
+        )
 
     def test_translate_tool_call(self):
-        part = SimpleNamespace(tool_name="view_file", args={"path": "a.txt"}, tool_call_id="1")
+        part = SimpleNamespace(
+            tool_name="view_file", args={"path": "a.txt"}, tool_call_id="1"
+        )
         out = A.translate(FunctionToolCallEvent(part=part))
         assert out.kind == "tool_call" and out.name == "view_file"
 
     def test_translate_tool_result(self):
-        out = A.translate(FunctionToolResultEvent(part=RetryPromptPart(content="denied")))
+        out = A.translate(
+            FunctionToolResultEvent(part=RetryPromptPart(content="denied"))
+        )
         assert out.kind == "tool_result" and "denied" in out.text
 
     def test_translate_part_start_text(self):
-        assert A.translate(PartStartEvent(index=0, part=TextPart(content="hi"))).text == "hi"
+        assert (
+            A.translate(PartStartEvent(index=0, part=TextPart(content="hi"))).text
+            == "hi"
+        )
 
     def test_translate_part_delta_text(self):
         event = PartDeltaEvent(index=0, delta=TextPartDelta(content_delta="yo"))
@@ -901,7 +1039,9 @@ class TestResidualBranches:
 
     def test_dunder_main_module_guard(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["harness", "--workspace", str(tmp_path)])
-        monkeypatch.setattr("builtins.input", lambda *a: (_ for _ in ()).throw(EOFError()))
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: (_ for _ in ()).throw(EOFError())
+        )
         monkeypatch.setattr("harness.main.build_agent", lambda c: object())
         with pytest.raises(SystemExit) as err:
             runpy.run_path("harness/__main__.py", run_name="__main__")

@@ -31,7 +31,7 @@ async def web_search(
             raise ToolError(f"search failed: {exc}") from exc
 
     hits = re.findall(
-        r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', resp.text, re.S
+        r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', resp.text, re.DOTALL
     )
     if not hits:
         return "(no results)"

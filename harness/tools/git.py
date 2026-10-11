@@ -59,7 +59,9 @@ async def git_commit(ctx: RunContext[AgentDeps], message: str) -> str:
 
 async def git_log(ctx: RunContext[AgentDeps], count: int = 10) -> str:
     """Show recent commits in the current branch."""
-    return (await _git(ctx.deps, "log", f"-{max(1, count)}", "--oneline")).strip() or "(no commits)"
+    return (
+        await _git(ctx.deps, "log", f"-{max(1, count)}", "--oneline")
+    ).strip() or "(no commits)"
 
 
 async def git_checkout_branch(ctx: RunContext[AgentDeps], branch: str) -> str:

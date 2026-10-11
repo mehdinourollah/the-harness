@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "the-harness"
+version = "0.1.0"
+description = "A small, policy-gated CLI coding agent built on PydanticAI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mehdi Nourollah" }]
+keywords = ["ai", "agent", "cli", "pydantic-ai", "coding-assistant"]
+dependencies = [
+  "pydantic-ai-slim[openai,anthropic]>=2.55,<3",
+  "pydantic>=2.14,<3",
+  "httpx>=0.28,<0.29",
+  "opentelemetry-sdk>=1.45,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.45,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9,<10",
+  "pytest-asyncio>=1.4,<2",
+  "pytest-cov>=7,<8",
+  "ruff==0.17.0",
+  "pyright>=1.1,<2",
+  "pre-commit>=4,<5",
+]
+
+[project.scripts]
+harness = "harness.main:main"
+
+[project.urls]
+Homepage = "https://github.com/mehdinourollah/the-harness"
+Repository = "https://github.com/mehdinourollah/the-harness"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["harness"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-q"
+testpaths = ["test_harness.py"]

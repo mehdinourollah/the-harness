@@ -7,28 +7,27 @@ from __future__ import annotations
 
 from pydantic_ai import FunctionToolset
 
+from harness.deps import AgentDeps
 from harness.tools import files, git, terminal, web
 
 
-def build_toolset() -> FunctionToolset:
-    ts: FunctionToolset = FunctionToolset()
-    for fn in (
-        files.view_file,
-        files.write_file,
-        files.patch_file,
-        files.list_directory,
-        files.grep_search,
-        files.glob_search,
-        terminal.execute_command,
-        git.git_status,
-        git.git_diff,
-        git.git_commit,
-        git.git_log,
-        git.git_checkout_branch,
-        web.web_search,
-        web.browse_url,
-    ):
-        ts.add_function(fn)
+def build_toolset() -> FunctionToolset[AgentDeps]:
+    """The 14 tools, registered one by one so each signature is type-checked."""
+    ts: FunctionToolset[AgentDeps] = FunctionToolset()
+    ts.add_function(files.view_file)
+    ts.add_function(files.write_file)
+    ts.add_function(files.patch_file)
+    ts.add_function(files.list_directory)
+    ts.add_function(files.grep_search)
+    ts.add_function(files.glob_search)
+    ts.add_function(terminal.execute_command)
+    ts.add_function(git.git_status)
+    ts.add_function(git.git_diff)
+    ts.add_function(git.git_commit)
+    ts.add_function(git.git_log)
+    ts.add_function(git.git_checkout_branch)
+    ts.add_function(web.web_search)
+    ts.add_function(web.browse_url)
     return ts
 
 

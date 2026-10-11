@@ -38,7 +38,8 @@ async def view_file(
     end = end_line if end_line is not None else len(lines)
     chunk = lines[start - 1 : end]
     numbered = "\n".join(f"{i:6d}  {line}" for i, line in enumerate(chunk, start))
-    return f"--- {path} (lines {start}-{start + len(chunk) - 1} of {len(lines)}) ---\n{numbered}"
+    header = f"--- {path} (lines {start}-{start + len(chunk) - 1} of {len(lines)}) ---"
+    return f"{header}\n{numbered}"
 
 
 async def write_file(ctx: RunContext[AgentDeps], path: str, content: str) -> str:

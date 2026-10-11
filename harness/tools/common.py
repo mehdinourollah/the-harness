@@ -17,7 +17,11 @@ def resolve(deps: AgentDeps, raw: str) -> Path:
     """
     root = deps.root
     candidate = Path(raw)
-    full = (root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+    full = (
+        (root / candidate).resolve()
+        if not candidate.is_absolute()
+        else candidate.resolve()
+    )
     if full != root and root not in full.parents:
         raise ToolError(f"path escapes workspace: {raw}")
     return full

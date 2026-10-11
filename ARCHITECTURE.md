@@ -4,9 +4,9 @@ A CLI coding agent built on **PydanticAI**. The framework owns the agent loop,
 provider adapters, tool schemas and message history; this repository owns the
 workspace tools, the execution-policy layer, the CLI, and the tracing wiring.
 
-Verified source of truth: `harness/` (12 modules, 547 statements),
-`test_harness.py` (110 tests, 100% line coverage), entrypoint
-`python -m harness.main`.
+Verified source of truth: `harness/` (16 modules, 577 statements),
+`test_harness.py` (118 tests, 100% line coverage), entrypoint
+`python -m harness.main` (console script `harness`).
 
 ## 1. Component diagram
 
