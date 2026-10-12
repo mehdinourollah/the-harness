@@ -25,8 +25,6 @@ if TYPE_CHECKING:
     from prompt_toolkit import PromptSession
 
 #: Palette — one colour per role, so turns are distinguishable at a glance.
-PROMPT_STYLE = "bold cyan"
-USER_STYLE = "bold cyan"
 TOOL_NAME_STYLE = "bold magenta"
 TOOL_ARGS_STYLE = "dim"
 TOOL_RESULT_STYLE = "dim"
@@ -103,12 +101,6 @@ def banner(config: HarnessConfig, policy: str) -> None:
     body.append(f"workspace {config.workspace}", style="dim")
     console.print(Panel(body, border_style="cyan", padding=(0, 1)))
     console.print("[dim]type 'exit' to quit[/dim]\n")
-
-
-def user_turn(prompt: str) -> None:
-    line = Text("❯ ", style=USER_STYLE)
-    line.append(prompt, style="bold")
-    console.print(line, soft_wrap=True)
 
 
 def tool_call(name: str, args: str) -> None:

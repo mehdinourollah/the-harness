@@ -10,6 +10,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
+import pydantic_ai
 from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
 from pydantic_ai.usage import RunUsage
 
@@ -25,6 +26,10 @@ from harness.ui import render, terminal_approval
 #: Harness failures plus PydanticAI's run-level failures (provider 4xx/5xx,
 #: retry exhaustion, usage limits). Both are reported, never traceback-dumped.
 RUN_FAILURES = (HarnessError, AgentRunError)
+
+#: The agent owns its output surface (banner, REPL prompt, tool rendering),
+#: so PydanticAI's own first-run ASCII banner must stay out of the way.
+pydantic_ai.BANNER_ENABLED = False
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -148,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not line:
             continue
-        ui.user_turn(line)
         try:
             asyncio.run(
                 run_once(

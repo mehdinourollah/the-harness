@@ -1059,9 +1059,14 @@ class TestUI:
         monkeypatch.setattr("builtins.input", lambda *a: "  typed  ")
         assert ui.read_line() == "typed"
 
-    def test_user_turn_is_echoed(self, capsys):
-        ui.user_turn("refactor the parser")
-        assert "refactor the parser" in capsys.readouterr().out
+    def test_pydantic_ai_banner_is_disabled(self):
+        # The harness owns its output surface; PydanticAI's ASCII banner must
+        # not print on the first agent run.
+        import pydantic_ai
+
+        import harness.main  # noqa: F401
+
+        assert pydantic_ai.BANNER_ENABLED is False
 
     def test_banner_shows_model_and_policy(self, capsys):
         config = HarnessConfig(provider="openai", model="gpt-5", workspace=Path("."))
